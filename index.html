@@ -42,79 +42,66 @@
     </section>
 
     <section id="room" class="room" hidden>
+      <!-- ✅ Top bar: exit, mic, camera -->
       <div class="room-head">
         <div>
           <div class="eyebrow">PRIVATE WATCH PARTY</div>
           <h2>Our movie room <span>♥</span></h2>
         </div>
-        <div class="room-meta">
+        <div class="room-controls">
           <span id="onlineCount">1 online</span>
           <button id="copyInvite" class="secondary small">Copy invite link</button>
+          <button id="micToggle" class="secondary small" title="Microphone">🎤 Mic</button>
+          <button id="cameraToggle" class="secondary small" title="Camera">📷 Camera</button>
+          <button id="leaveBtnTop" class="danger small" title="Exit room">✕ Exit</button>
         </div>
       </div>
 
       <div class="workspace">
-        <div class="main-column">
-          <div class="player-card">
-            <div class="player-top">
-              <strong>Now watching</strong>
-              <div class="source-actions">
-                <button id="youtubeBtn" class="chip">YouTube</button>
-                <button id="linkBtn" class="chip">Video link</button>
-              </div>
-            </div>
-
-            <div id="youtubeWrap" class="media-wrap" hidden>
-              <div id="youtubePlayer"></div>
-            </div>
-
-            <video id="videoPlayer" class="media-wrap" controls playsinline hidden></video>
-
-            <div id="emptyPlayer" class="empty-player">
-              <div class="play-mark">▶</div>
-              <h3>Pick something lovely</h3>
-              <p>Choose YouTube or paste a direct video link (MP4/WebM) to begin.</p>
-            </div>
-
-            <div class="player-foot">
-              <span id="playStatus">Waiting for a video</span>
-              <span>Playback sync is best-effort</span>
+        <!-- ✅ Video sabse upar -->
+        <div class="player-card">
+          <div class="player-top">
+            <strong>Now watching</strong>
+            <div class="source-actions">
+              <button id="youtubeBtn" class="chip">YouTube</button>
+              <button id="linkBtn" class="chip">Video link</button>
             </div>
           </div>
 
-          <div class="camera-card">
-            <div class="section-title">
-              <div>
-                <span class="eyebrow">SAY HELLO</span>
-                <h3>Face cam <span>♡</span></h3>
-              </div>
-              <span class="limit">Cameras are optional</span>
-            </div>
+          <div id="youtubeWrap" class="media-wrap" hidden>
+            <div id="youtubePlayer"></div>
+          </div>
 
-            <div class="camera-grid">
-              <div class="cam-box">
-                <video id="localVideo" autoplay muted playsinline></video>
-                <span>You</span>
-              </div>
-              <div class="remote-cams" id="remoteCams"></div>
-            </div>
+          <video id="videoPlayer" class="media-wrap" controls playsinline hidden></video>
 
-            <div class="controls">
-              <button id="cameraToggle" class="secondary">Turn camera on</button>
-              <button id="switchCamera" class="secondary">Switch camera</button>
-              <button id="micToggle" class="secondary">Mute mic</button>
-              <button id="leaveCallBtn" class="secondary">End call</button>
-            </div>
+          <div id="emptyPlayer" class="empty-player">
+            <div class="play-mark">▶</div>
+            <h3>Pick something lovely</h3>
+            <p>Choose YouTube or paste a direct video link (MP4/WebM) to begin.</p>
+          </div>
 
-            <p class="hint">Camera and microphone access require HTTPS and your permission.</p>
+          <div class="player-foot">
+            <span id="playStatus">Waiting for a video</span>
+            <span>Playback sync is best-effort</span>
           </div>
         </div>
 
+        <!-- ✅ Chat uske neeche — camera on hone pe isi me square box banega -->
         <aside class="chat-card">
           <div class="section-title">
             <div>
               <span class="eyebrow">LITTLE MESSAGES</span>
               <h3>Our chat 💌</h3>
+            </div>
+          </div>
+
+          <div id="callArea" class="call-area" hidden>
+            <div class="call-grid camera-grid">
+              <div class="cam-box" id="localCamBox">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <span>You</span>
+              </div>
+              <div class="remote-cams" id="remoteCams"></div>
             </div>
           </div>
 
@@ -130,7 +117,7 @@
 
           <div class="chat-bottom">
             <span>Room is temporary</span>
-            <button id="leaveBtn" class="leave">Leave room</button>
+            <span>Camera &amp; mic need HTTPS + permission</span>
           </div>
         </aside>
       </div>
