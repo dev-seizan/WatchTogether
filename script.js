@@ -1,4 +1,3 @@
-
 // Render WebSocket server
 const WS_URL = "wss://watchtogether-devseizun.onrender.com";
 
@@ -8,6 +7,7 @@ const state = {
   ws: null,
   roomId: null,
   selfId: null,
+  name: "Guest",
   peers: new Map(),
   pcs: new Map(),
   localStream: null,
@@ -16,14 +16,37 @@ const state = {
   facing: "user",
   yt: null,
   ytReady: false,
-  ignoreSync: false
+  pendingVideo: null,
+  ignoreSync: false,
+  stopReconnect: false
+};
+
+let reconnectAttempts = 0;
+let reconnectTimer = null;
+
+// Strict NAT (mobile data / office wifi) ke liye baad me TURN server yahan add karo:
+const RTC_CONFIG = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" }
+    // { urls: "turn:YOUR_TURN_SERVER:3478", username: "YOUR_USER", credential: "YOUR_PASS" }
+  ]
 };
 
 const home = $("home");
 const room = $("room");
 
 function randomRoom() {
-  return "love-" + crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+  let hex = "";
+
+  try {
+    hex = crypto.randomUUID().replace(/-/g, "");
+  } catch {
+    const buf = new Uint8Array(12);
+    (crypto.getRandomValues || (a => a.map(() => Math.floor(Math.random() * 256))))(buf);
+    hex = [...buf].map(b => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  return "love-" + hex.slice(0, 12);
 }
 
 function inviteUrl(id) {
@@ -49,11 +72,22 @@ function showError(message) {
   alert(message);
 }
 
+function trimMessages() {
+  const m = $("messages");
+
+  while (m.children.length > 300) {
+    m.firstChild.remove();
+  }
+
+  m.scrollTop = m.scrollHeight;
+}
+
 function addSystem(text) {
   const p = document.createElement("div");
   p.className = "system-message";
   p.textContent = text;
   $("messages").appendChild(p);
+  trimMessages();
 }
 
 function addMessage(name, text, mine = false, image = null) {
@@ -77,28 +111,44 @@ function addMessage(name, text, mine = false, image = null) {
   }
 
   $("messages").appendChild(box);
-  $("messages").scrollTop = $("messages").scrollHeight;
+  trimMessages();
 }
 
-function connect(roomId, create) {
-  if (state.ws && state.ws.readyState === WebSocket.OPEN) {
+function scheduleReconnect() {
+  if (state.stopReconnect || reconnectAttempts >= 5) {
+    if (reconnectAttempts >= 5) addSystem("Couldn't reconnect. Please refresh the page.");
+    return;
+  }
+
+  reconnectAttempts++;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(() => connect(state.roomId, false, true), 1500);
+}
+
+function connect(roomId, create, reconnect = false) {
+  if (state.ws) {
+    state.ws._replaced = true;
     state.ws.close();
   }
 
-  const name = (prompt("What should we call you?", "Guest") || "Guest")
-    .trim().slice(0, 24) || "Guest";
+  if (!reconnect) {
+    state.name = (prompt("What should we call you?", "Guest") || "Guest")
+      .trim().slice(0, 24) || "Guest";
+    state.stopReconnect = false;
+    reconnectAttempts = 0;
+  }
 
+  clearTimeout(reconnectTimer);
   state.roomId = roomId;
-  state.ws = new WebSocket(WS_URL);
 
-  const ws = state.ws;
+  const ws = state.ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
     ws.send(JSON.stringify({
       type: "join",
       roomId,
       create,
-      name
+      name: state.name
     }));
   };
 
@@ -112,12 +162,24 @@ function connect(roomId, create) {
     }
 
     if (msg.type === "error") {
-      showError(msg.message);
+      if (!room.hidden) {
+        addSystem(msg.message);
+        state.stopReconnect = true;
+        clearTimeout(reconnectTimer);
+      } else {
+        showError(msg.message);
+      }
       return;
     }
 
     if (msg.type === "joined") {
+      for (const id of [...state.pcs.keys()]) closePeer(id);
+      state.peers.clear();
+
       state.selfId = msg.id;
+      state.stopReconnect = false;
+      reconnectAttempts = 0;
+
       home.hidden = true;
       room.hidden = false;
 
@@ -127,12 +189,7 @@ function connect(roomId, create) {
 
       msg.peers.forEach(p => state.peers.set(p.id, p.name));
 
-      msg.peers.forEach(p => {
-        if (state.selfId.localeCompare(p.id) < 0) {
-          createOffer(p.id);
-        }
-      });
-
+      if (msg.video) applyVideoState(msg.video);
       return;
     }
 
@@ -143,16 +200,14 @@ function connect(roomId, create) {
     if (msg.type === "peer-joined") {
       state.peers.set(msg.id, msg.name);
       addSystem(`${msg.name} joined the room`);
-
-      if (state.selfId.localeCompare(msg.id) < 0) {
-        createOffer(msg.id);
-      }
+      makePeer(msg.id);
     }
 
     if (msg.type === "peer-left") {
+      const name = state.peers.get(msg.id);
       state.peers.delete(msg.id);
       closePeer(msg.id);
-      addSystem("Someone left the room");
+      addSystem(`${name || "Someone"} left the room`);
     }
 
     if (msg.type === "chat") {
@@ -171,16 +226,26 @@ function connect(roomId, create) {
       applySync(msg);
     }
 
+    if (msg.type === "call-ended") {
+      removeRemoteBox(msg.from);
+    }
+
     if (msg.type === "signal") {
       await handleSignal(msg.from, msg.signal);
     }
   };
 
   ws.onerror = () => {
-    showError("Could not connect to the Render room server. Check the Render service and URL.");
+    if (room.hidden) {
+      showError("Could not connect to the Render room server. Check the Render service and URL.");
+    }
   };
 
-  ws.onclose = () => {};
+  ws.onclose = () => {
+    if (ws._replaced || !state.roomId || room.hidden || state.stopReconnect) return;
+    addSystem("Connection lost. Reconnecting...");
+    scheduleReconnect();
+  };
 }
 
 $("createBtn").onclick = () => {
@@ -203,6 +268,7 @@ $("copyInvite").onclick = async () => {
   try {
     await navigator.clipboard.writeText(link);
     $("copyInvite").textContent = "Copied!";
+    setTimeout(() => $("copyInvite").textContent = "Copy invite link", 1500);
   } catch {
     prompt("Copy invitation link:", link);
   }
@@ -246,92 +312,124 @@ $("photoBtn").onclick = () => {
   f.click();
 };
 
-function dialog(title, text, placeholder, callback) {
+// ---------- Dialog (Enter key fix + backdrop close) ----------
+
+let dialogCallback = null;
+
+function openDialog(title, text, placeholder, callback) {
   $("dialogTitle").textContent = title;
   $("dialogText").textContent = text;
   $("dialogInput").placeholder = placeholder;
   $("dialogInput").value = "";
+  dialogCallback = callback;
 
-  const d = $("promptDialog");
-  d.showModal();
-
-  $("dialogConfirm").onclick = e => {
-    e.preventDefault();
-
-    const value = $("dialogInput").value.trim();
-
-    if (value) {
-      d.close();
-      callback(value);
-    }
-  };
+  $("promptDialog").showModal();
+  setTimeout(() => $("dialogInput").focus(), 50);
 }
 
+function closeDialog(ok) {
+  const d = $("promptDialog");
+
+  if (ok) {
+    const value = $("dialogInput").value.trim();
+    if (!value) return;
+    d.close();
+    const cb = dialogCallback;
+    dialogCallback = null;
+    cb(value);
+  } else {
+    d.close();
+    dialogCallback = null;
+  }
+}
+
+$("dialogForm").onsubmit = e => {
+  e.preventDefault();
+  closeDialog(true);
+};
+
+document.querySelector("#promptDialog .x").onclick = () => closeDialog(false);
+
+$("promptDialog").addEventListener("click", e => {
+  if (e.target === $("promptDialog")) closeDialog(false);
+});
+
 $("youtubeBtn").onclick = () => {
-  dialog(
+  openDialog(
     "Watch YouTube together",
-    "Paste a YouTube video URL.",
+    "Paste a YouTube link — youtube.com, youtu.be, Shorts, sab chalenge.",
     "https://youtube.com/watch?v=...",
     url => loadYouTube(url, true)
   );
 };
 
 $("linkBtn").onclick = () => {
-  dialog(
+  openDialog(
     "Add an online video",
-    "Paste a direct MP4/WebM URL.",
+    "Paste a direct MP4/WebM video URL from any website.",
     "Direct video URL",
     url => loadDirectVideo(url, true)
   );
 };
 
-$("driveBtn").onclick = () => {
-  dialog(
-    "Google Drive video",
-    "Drive playback depends on file permissions and Google delivery support.",
-    "Google Drive share link",
-    url => {
-      const id =
-        (url.match(/\/d\/([^/]+)/) ||
-        url.match(/[?&]id=([^&]+)/) || [])[1];
-
-      if (!id) return showError("Invalid Google Drive file link.");
-
-      loadDirectVideo(
-        `https://drive.google.com/uc?export=download&id=${id}`,
-        true
-      );
-    }
-  );
-};
-
-$("fileBtn").onclick = () => $("fileInput").click();
-
-$("fileInput").onchange = () => {
-  const file = $("fileInput").files[0];
-  if (!file) return;
-
-  loadDirectVideo(URL.createObjectURL(file), false);
-
-  addSystem("This local file plays only on your device; it is not transferred to other viewers.");
-};
+// ---------- YouTube ----------
 
 function getYouTubeId(url) {
   try {
     const u = new URL(url);
 
-    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
-    if (u.searchParams.get("v")) return u.searchParams.get("v");
+    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1).split("/")[0] || null;
 
-    const match = u.pathname.match(/\/(embed|shorts)\/([^/]+)/);
+    if (u.hostname.includes("youtube.com")) {
+      if (u.searchParams.get("v")) return u.searchParams.get("v");
+      const m = u.pathname.match(/\/(embed|shorts|live)\/([^/?]+)/);
+      return m ? m[2] : null;
+    }
 
-    return match ? match[2] : null;
+    return null;
   } catch {
     return null;
   }
 }
 
-function loadYouTube(url, broadcast) {
+function createYTPlayer(videoId, resume) {
+  state.yt = new YT.Player("youtubePlayer", {
+    videoId: videoId || undefined,
+    playerVars: { rel: 0 },
+    events: {
+      onReady: () => {
+        if (resume) ytApply(resume.time, resume.action);
+      },
+      onStateChange: onYTState
+    }
+  });
+}
+
+function ytApply(time, action) {
+  if (!state.yt || !state.yt.seekTo) return;
+
+  state.ignoreSync = true;
+
+  try {
+    state.yt.seekTo(time || 0, true);
+    if (action === "play") state.yt.playVideo();
+    else state.yt.pauseVideo();
+  } catch (e) {}
+
+  setTimeout(() => state.ignoreSync = false, 600);
+}
+
+function onYTState(e) {
+  if (state.ignoreSync || !state.yt || !state.yt.getCurrentTime) return;
+
+  if (e.data === YT.PlayerState.PLAYING) {
+    send({ type: "sync", kind: "yt", action: "play", time: state.yt.getCurrentTime() });
+  } else if (e.data === YT.PlayerState.PAUSED) {
+    send({ type: "sync", kind: "yt", action: "pause", time: state.yt.getCurrentTime() });
+  }
+}
+
+function loadYouTube(url, broadcast, resume) {
   const id = getYouTubeId(url);
 
   if (!id) return showError("Please enter a valid YouTube URL.");
@@ -340,16 +438,17 @@ function loadYouTube(url, broadcast) {
   $("videoPlayer").hidden = true;
   $("youtubeWrap").hidden = false;
 
-  if (state.ytReady) {
-    if (state.yt) {
-      state.yt.loadVideoById(id);
-    } else {
-      state.yt = new YT.Player("youtubePlayer", {
-        videoId: id
-      });
-    }
+  const start = resume || { time: 0, action: "pause" };
+
+  if (state.ytReady && state.yt && state.yt.loadVideoById) {
+    state.ignoreSync = true;
+    state.yt.loadVideoById(id);
+    if (start.action === "play") state.yt.playVideo();
+    else state.yt.pauseVideo();
+    setTimeout(() => state.ignoreSync = false, 600);
   } else {
-    window.pendingYT = id;
+    state.pendingVideo = { id, ...start };
+    if (state.ytReady && !state.yt) createYTPlayer(id, start);
   }
 
   if (broadcast) send({ type: "youtube", url });
@@ -360,18 +459,24 @@ function loadYouTube(url, broadcast) {
 window.onYouTubeIframeAPIReady = () => {
   state.ytReady = true;
 
-  if (window.pendingYT) {
-    state.yt = new YT.Player("youtubePlayer", {
-      videoId: window.pendingYT
-    });
-
-    window.pendingYT = null;
+  if (state.pendingVideo) {
+    const pv = state.pendingVideo;
+    state.pendingVideo = null;
+    createYTPlayer(pv.id, pv);
   }
 };
+
+// ---------- Direct video ----------
 
 function loadDirectVideo(url, broadcast) {
   $("youtubeWrap").hidden = true;
   $("emptyPlayer").hidden = true;
+
+  if (state.yt && state.yt.stopVideo) {
+    state.ignoreSync = true;
+    try { state.yt.stopVideo(); } catch (e) {}
+    setTimeout(() => state.ignoreSync = false, 600);
+  }
 
   const video = $("videoPlayer");
 
@@ -388,36 +493,29 @@ function loadDirectVideo(url, broadcast) {
 
 $("videoPlayer").addEventListener("play", () => {
   if (!state.ignoreSync) {
-    send({
-      type: "sync",
-      kind: "direct-control",
-      action: "play",
-      time: $("videoPlayer").currentTime
-    });
+    send({ type: "sync", kind: "direct-control", action: "play", time: $("videoPlayer").currentTime });
   }
 });
 
 $("videoPlayer").addEventListener("pause", () => {
   if (!state.ignoreSync) {
-    send({
-      type: "sync",
-      kind: "direct-control",
-      action: "pause",
-      time: $("videoPlayer").currentTime
-    });
+    send({ type: "sync", kind: "direct-control", action: "pause", time: $("videoPlayer").currentTime });
   }
 });
 
 $("videoPlayer").addEventListener("seeked", () => {
   if (!state.ignoreSync) {
-    send({
-      type: "sync",
-      kind: "direct-control",
-      action: "seek",
-      time: $("videoPlayer").currentTime
-    });
+    send({ type: "sync", kind: "direct-control", action: "seek", time: $("videoPlayer").currentTime });
   }
 });
+
+$("videoPlayer").addEventListener("error", () => {
+  if (!$("videoPlayer").hidden && $("videoPlayer").src) {
+    $("playStatus").textContent = "Couldn't load that video. Check the link.";
+  }
+});
+
+// ---------- Sync (donon players ke liye) ----------
 
 function applySync(msg) {
   if (msg.kind === "direct") {
@@ -427,27 +525,74 @@ function applySync(msg) {
 
   if (msg.kind === "direct-control") {
     const video = $("videoPlayer");
+    if (video.hidden) return;
 
     state.ignoreSync = true;
     video.currentTime = msg.time || 0;
 
     if (msg.action === "play") {
       video.play().catch(() => {});
-    } else if (msg.action === "pause") {
+    } else {
       video.pause();
     }
 
     setTimeout(() => state.ignoreSync = false, 600);
+    return;
+  }
+
+  if (msg.kind === "yt") {
+    if (state.ytReady && state.yt && state.yt.seekTo) {
+      ytApply(msg.time, msg.action);
+    } else if (state.pendingVideo) {
+      state.pendingVideo.time = msg.time;
+      state.pendingVideo.action = msg.action;
+    }
   }
 }
 
+// Naye joiner ko current video state (server "joined" me bhejta hai)
+function applyVideoState(v) {
+  if (!v) return;
+
+  if (v.kind === "yt") {
+    loadYouTube(v.url, false, { time: v.time, action: v.action });
+  } else if (v.kind === "direct") {
+    loadDirectVideo(v.url, false);
+
+    if (typeof v.time === "number" && v.time > 0) {
+      const video = $("videoPlayer");
+
+      const seek = () => {
+        state.ignoreSync = true;
+        video.currentTime = v.time;
+        if (v.action === "play") video.play().catch(() => {});
+        else video.pause();
+        setTimeout(() => state.ignoreSync = false, 600);
+      };
+
+      if (video.readyState >= 1) seek();
+      else video.addEventListener("loadedmetadata", seek, { once: true });
+    }
+  }
+}
+
+// ---------- Leave ----------
+
 $("leaveBtn").onclick = () => {
+  state.stopReconnect = true;
+  state.roomId = null;
+  clearTimeout(reconnectTimer);
   stopMedia();
 
-  if (state.ws) state.ws.close();
+  if (state.ws) {
+    state.ws._replaced = true;
+    state.ws.close();
+  }
 
   location.href = location.pathname;
 };
+
+// ---------- Camera / Mic (WebRTC) ----------
 
 async function startMedia(video) {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -469,12 +614,14 @@ async function startMedia(video) {
 
     $("localVideo").srcObject = video ? stream : null;
 
-    $("micToggle").textContent = "Mute mic";
+    stream.getAudioTracks().forEach(t => t.enabled = state.micOn);
+
+    $("micToggle").textContent = state.micOn ? "Mute mic" : "Unmute mic";
     $("cameraToggle").textContent = video ? "Turn camera off" : "Turn camera on";
 
     for (const pc of state.pcs.values()) {
       for (const track of stream.getTracks()) {
-        const sender = pc.getSenders().find(s => s.track?.kind === track.kind);
+        const sender = pc.getSenders().find(s => s.track && s.track.kind === track.kind);
 
         if (sender) {
           await sender.replaceTrack(track);
@@ -491,17 +638,28 @@ async function startMedia(video) {
 $("cameraToggle").onclick = async () => {
   if (!state.localStream || !state.cameraOn) {
     await startMedia(true);
-  } else {
-    state.localStream.getVideoTracks().forEach(t => t.stop());
-    $("localVideo").srcObject = null;
-    state.cameraOn = false;
-    $("cameraToggle").textContent = "Turn camera on";
+    return;
+  }
+
+  const stream = state.localStream;
+
+  stream.getVideoTracks().forEach(t => {
+    t.stop();
+    stream.removeTrack(t);
+  });
+
+  state.cameraOn = false;
+  $("localVideo").srcObject = null;
+  $("cameraToggle").textContent = "Turn camera on";
+
+  for (const pc of state.pcs.values()) {
+    const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
+    if (sender) sender.replaceTrack(null).catch(() => {});
   }
 };
 
 $("micToggle").onclick = async () => {
   if (!state.localStream) await startMedia(false);
-
   if (!state.localStream) return;
 
   state.micOn = !state.micOn;
@@ -519,7 +677,10 @@ $("switchCamera").onclick = async () => {
   if (state.cameraOn) await startMedia(true);
 };
 
-$("leaveCallBtn").onclick = stopMedia;
+$("leaveCallBtn").onclick = () => {
+  send({ type: "call-ended" });
+  stopMedia();
+};
 
 function stopMedia() {
   if (state.localStream) {
@@ -527,23 +688,54 @@ function stopMedia() {
   }
 
   state.localStream = null;
+  state.cameraOn = false;
 
   $("localVideo").srcObject = null;
-  $("remoteVideo").srcObject = null;
-
-  state.cameraOn = false;
+  $("remoteCams").innerHTML = "";
 
   for (const id of [...state.pcs.keys()]) {
     closePeer(id);
   }
 }
 
+// Har peer ka apna video box
+function ensureRemoteBox(id) {
+  let box = document.getElementById("cam-" + id);
+
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "cam-box";
+    box.id = "cam-" + id;
+
+    const v = document.createElement("video");
+    v.autoplay = true;
+    v.playsInline = true;
+
+    const s = document.createElement("span");
+    s.textContent = state.peers.get(id) || "Guest";
+
+    box.append(v, s);
+    box._video = v;
+
+    $("remoteCams").appendChild(box);
+  }
+
+  return box;
+}
+
+function removeRemoteBox(id) {
+  const b = document.getElementById("cam-" + id);
+  if (b) b.remove();
+}
+
+// Perfect negotiation — camera baad me on ho to bhi renegotiation automatic
 function makePeer(id) {
   if (state.pcs.has(id)) return state.pcs.get(id);
 
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
-  });
+  const pc = new RTCPeerConnection(RTC_CONFIG);
+
+  pc._makingOffer = false;
+  pc._polite = state.selfId.localeCompare(id) > 0;
 
   state.pcs.set(id, pc);
 
@@ -552,6 +744,22 @@ function makePeer(id) {
       pc.addTrack(track, state.localStream);
     });
   }
+
+  pc.onnegotiationneeded = async () => {
+    try {
+      pc._makingOffer = true;
+      await pc.setLocalDescription(await pc.createOffer());
+      send({
+        type: "signal",
+        to: id,
+        signal: { description: pc.localDescription }
+      });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      pc._makingOffer = false;
+    }
+  };
 
   pc.onicecandidate = e => {
     if (e.candidate) {
@@ -564,28 +772,19 @@ function makePeer(id) {
   };
 
   pc.ontrack = e => {
-    if (e.streams[0]) $("remoteVideo").srcObject = e.streams[0];
+    if (e.streams[0]) {
+      const box = ensureRemoteBox(id);
+      box._video.srcObject = e.streams[0];
+    }
+  };
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "failed" && pc.restartIce) {
+      pc.restartIce();
+    }
   };
 
   return pc;
-}
-
-async function createOffer(id) {
-  const pc = makePeer(id);
-
-  try {
-    const offer = await pc.createOffer();
-
-    await pc.setLocalDescription(offer);
-
-    send({
-      type: "signal",
-      to: id,
-      signal: { description: pc.localDescription }
-    });
-  } catch (e) {
-    console.error(e);
-  }
 }
 
 async function handleSignal(from, signal) {
@@ -593,13 +792,16 @@ async function handleSignal(from, signal) {
 
   try {
     if (signal.description) {
+      const offerCollision =
+        signal.description.type === "offer" &&
+        (pc._makingOffer || pc.signalingState !== "stable");
+
+      if (offerCollision && !pc._polite) return; // impolite: apna offer jeetega
+
       await pc.setRemoteDescription(signal.description);
 
       if (signal.description.type === "offer") {
-        const answer = await pc.createAnswer();
-
-        await pc.setLocalDescription(answer);
-
+        await pc.setLocalDescription(await pc.createAnswer());
         send({
           type: "signal",
           to: from,
@@ -609,7 +811,11 @@ async function handleSignal(from, signal) {
     }
 
     if (signal.candidate) {
-      await pc.addIceCandidate(signal.candidate);
+      try {
+        await pc.addIceCandidate(signal.candidate);
+      } catch (e) {
+        if (!pc._polite) throw e;
+      }
     }
   } catch (e) {
     console.error("WebRTC signaling error", e);
@@ -620,11 +826,11 @@ function closePeer(id) {
   const pc = state.pcs.get(id);
 
   if (pc) {
-    pc.close();
+    try { pc.close(); } catch (e) {}
     state.pcs.delete(id);
   }
 
-  $("remoteVideo").srcObject = null;
+  removeRemoteBox(id);
 }
 
 const initialRoom = new URLSearchParams(location.search).get("room");
