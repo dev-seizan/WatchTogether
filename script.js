@@ -24,7 +24,6 @@ const state = {
 let reconnectAttempts = 0;
 let reconnectTimer = null;
 
-// Strict NAT (mobile data / office wifi) ke liye baad me TURN server yahan add karo:
 const RTC_CONFIG = {
   iceServers: [
     { urls: "stun:stun.l.google.com:19302" }
@@ -114,15 +113,24 @@ function addMessage(name, text, mine = false, image = null) {
   trimMessages();
 }
 
+// ✅ Camera on ho ya koi remote cam ho → chat ke andar box dikhe, chat apne aap neeche shift
+function refreshCallArea() {
+  const hasRemotes = $("remoteCams").children.length > 0;
+  $("callArea").hidden = !(state.cameraOn || hasRemotes);
+  $("localCamBox").style.display = state.cameraOn ? "" : "none";
+}
+
 function scheduleReconnect() {
-  if (state.stopReconnect || reconnectAttempts >= 5) {
-    if (reconnectAttempts >= 5) addSystem("Couldn't reconnect. Please refresh the page.");
+  if (state.stopReconnect) return;
+
+  if (reconnectAttempts >= 5) {
+    addSystem("Couldn't reconnect. Please refresh the page.");
     return;
   }
 
   reconnectAttempts++;
   clearTimeout(reconnectTimer);
-  reconnectTimer = setTimeout(() => connect(state.roomId, false, true), 1500);
+  reconnectTimer = setTimeout(() => connect(state.roomId, true, true), 1500);
 }
 
 function connect(roomId, create, reconnect = false) {
@@ -248,8 +256,9 @@ function connect(roomId, create, reconnect = false) {
   };
 }
 
+// Create room -> naya tab
 $("createBtn").onclick = () => {
-  connect(randomRoom(), true);
+  window.open(inviteUrl(randomRoom()), "_blank");
 };
 
 $("joinBtn").onclick = () => {
@@ -259,7 +268,7 @@ $("joinBtn").onclick = () => {
     return showError("Paste an invitation link first.");
   }
 
-  connect(id, false);
+  connect(id, true);
 };
 
 $("copyInvite").onclick = async () => {
@@ -312,7 +321,7 @@ $("photoBtn").onclick = () => {
   f.click();
 };
 
-// ---------- Dialog (Enter key fix + backdrop close) ----------
+// ---------- Dialog ----------
 
 let dialogCallback = null;
 
@@ -367,8 +376,18 @@ $("linkBtn").onclick = () => {
   openDialog(
     "Add an online video",
     "Paste a direct MP4/WebM video URL from any website.",
-    "Direct video URL",
-    url => loadDirectVideo(url, true)
+    "Direct video URL (ends with .mp4 / .webm)",
+    url => {
+      if (getYouTubeId(url)) {
+        return loadYouTube(url, true);
+      }
+
+      if (location.protocol === "https:" && /^http:\/\//i.test(url)) {
+        return showError("HTTP video link HTTPS page pe browser block kar deta hai. HTTPS wala link use karo.");
+      }
+
+      loadDirectVideo(url, true);
+    }
   );
 };
 
@@ -487,6 +506,7 @@ function loadDirectVideo(url, broadcast) {
   $("playStatus").textContent = "Online video selected";
 
   if (broadcast) {
+    video.play().catch(() => {});
     send({ type: "sync", kind: "direct", url });
   }
 }
@@ -511,11 +531,12 @@ $("videoPlayer").addEventListener("seeked", () => {
 
 $("videoPlayer").addEventListener("error", () => {
   if (!$("videoPlayer").hidden && $("videoPlayer").src) {
-    $("playStatus").textContent = "Couldn't load that video. Check the link.";
+    $("playStatus").textContent = "Couldn't load that video — link direct MP4/WebM nahi hai ya block ho raha hai.";
+    showError("Video load nahi hui. Link direct video file (.mp4/.webm) honi chahiye, website ka page URL nahi.");
   }
 });
 
-// ---------- Sync (donon players ke liye) ----------
+// ---------- Sync ----------
 
 function applySync(msg) {
   if (msg.kind === "direct") {
@@ -550,7 +571,6 @@ function applySync(msg) {
   }
 }
 
-// Naye joiner ko current video state (server "joined" me bhejta hai)
 function applyVideoState(v) {
   if (!v) return;
 
@@ -576,9 +596,9 @@ function applyVideoState(v) {
   }
 }
 
-// ---------- Leave ----------
+// ---------- Exit (top bar) ----------
 
-$("leaveBtn").onclick = () => {
+$("leaveBtnTop").onclick = () => {
   state.stopReconnect = true;
   state.roomId = null;
   clearTimeout(reconnectTimer);
@@ -592,7 +612,7 @@ $("leaveBtn").onclick = () => {
   location.href = location.pathname;
 };
 
-// ---------- Camera / Mic (WebRTC) ----------
+// ---------- Mic / Camera (top bar) ----------
 
 async function startMedia(video) {
   if (!navigator.mediaDevices?.getUserMedia) {
@@ -616,8 +636,11 @@ async function startMedia(video) {
 
     stream.getAudioTracks().forEach(t => t.enabled = state.micOn);
 
-    $("micToggle").textContent = state.micOn ? "Mute mic" : "Unmute mic";
-    $("cameraToggle").textContent = video ? "Turn camera off" : "Turn camera on";
+    // ✅ Button labels update
+    $("micToggle").textContent = state.micOn ? "🎤 Mic" : "🔇 Muted";
+    $("cameraToggle").textContent = video ? "🚫 Cam off" : "📷 Camera";
+
+    refreshCallArea();
 
     for (const pc of state.pcs.values()) {
       for (const track of stream.getTracks()) {
@@ -641,6 +664,7 @@ $("cameraToggle").onclick = async () => {
     return;
   }
 
+  // Camera off (voice chat chalti rehti hai)
   const stream = state.localStream;
 
   stream.getVideoTracks().forEach(t => {
@@ -650,7 +674,9 @@ $("cameraToggle").onclick = async () => {
 
   state.cameraOn = false;
   $("localVideo").srcObject = null;
-  $("cameraToggle").textContent = "Turn camera on";
+  $("cameraToggle").textContent = "📷 Camera";
+
+  refreshCallArea();
 
   for (const pc of state.pcs.values()) {
     const sender = pc.getSenders().find(s => s.track && s.track.kind === "video");
@@ -668,18 +694,7 @@ $("micToggle").onclick = async () => {
     t.enabled = state.micOn;
   });
 
-  $("micToggle").textContent = state.micOn ? "Mute mic" : "Unmute mic";
-};
-
-$("switchCamera").onclick = async () => {
-  state.facing = state.facing === "user" ? "environment" : "user";
-
-  if (state.cameraOn) await startMedia(true);
-};
-
-$("leaveCallBtn").onclick = () => {
-  send({ type: "call-ended" });
-  stopMedia();
+  $("micToggle").textContent = state.micOn ? "🎤 Mic" : "🔇 Muted";
 };
 
 function stopMedia() {
@@ -693,12 +708,13 @@ function stopMedia() {
   $("localVideo").srcObject = null;
   $("remoteCams").innerHTML = "";
 
+  refreshCallArea();
+
   for (const id of [...state.pcs.keys()]) {
     closePeer(id);
   }
 }
 
-// Har peer ka apna video box
 function ensureRemoteBox(id) {
   let box = document.getElementById("cam-" + id);
 
@@ -718,6 +734,7 @@ function ensureRemoteBox(id) {
     box._video = v;
 
     $("remoteCams").appendChild(box);
+    refreshCallArea();
   }
 
   return box;
@@ -725,10 +742,12 @@ function ensureRemoteBox(id) {
 
 function removeRemoteBox(id) {
   const b = document.getElementById("cam-" + id);
-  if (b) b.remove();
+  if (b) {
+    b.remove();
+    refreshCallArea();
+  }
 }
 
-// Perfect negotiation — camera baad me on ho to bhi renegotiation automatic
 function makePeer(id) {
   if (state.pcs.has(id)) return state.pcs.get(id);
 
@@ -796,7 +815,7 @@ async function handleSignal(from, signal) {
         signal.description.type === "offer" &&
         (pc._makingOffer || pc.signalingState !== "stable");
 
-      if (offerCollision && !pc._polite) return; // impolite: apna offer jeetega
+      if (offerCollision && !pc._polite) return;
 
       await pc.setRemoteDescription(signal.description);
 
@@ -836,5 +855,5 @@ function closePeer(id) {
 const initialRoom = new URLSearchParams(location.search).get("room");
 
 if (initialRoom) {
-  $("inviteInput").value = inviteUrl(initialRoom);
+  connect(initialRoom, true);
 }
