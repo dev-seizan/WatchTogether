@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -28,17 +29,29 @@
         </div>
         <small>Up to 10 people in a room · No account needed</small>
       </div>
+
       <div class="hero-art" aria-hidden="true">
-        <div class="heart heart-one">♥</div><div class="heart heart-two">♥</div>
-        <div class="poster"><div class="poster-sun"></div><div class="poster-copy">MOVIE<br>NIGHT</div><div class="poster-bottom">♡ together is our favourite place ♡</div></div>
+        <div class="heart heart-one">♥</div>
+        <div class="heart heart-two">♥</div>
+        <div class="poster">
+          <div class="poster-sun"></div>
+          <div class="poster-copy">MOVIE<br>NIGHT</div>
+          <div class="poster-bottom">♡ together is our favourite place ♡</div>
+        </div>
         <div class="floating-note">popcorn + you = perfect 🍿</div>
       </div>
     </section>
 
     <section id="room" class="room" hidden>
       <div class="room-head">
-        <div><div class="eyebrow">PRIVATE WATCH PARTY</div><h2>Our movie room <span>♥</span></h2></div>
-        <div class="room-meta"><span id="onlineCount">1 online</span><button id="copyInvite" class="secondary small">Copy invite link</button></div>
+        <div>
+          <div class="eyebrow">PRIVATE WATCH PARTY</div>
+          <h2>Our movie room <span>♥</span></h2>
+        </div>
+        <div class="room-meta">
+          <span id="onlineCount">1 online</span>
+          <button id="copyInvite" class="secondary small">Copy invite link</button>
+        </div>
       </div>
 
       <div class="workspace">
@@ -49,42 +62,87 @@
               <div class="source-actions">
                 <button id="youtubeBtn" class="chip">YouTube</button>
                 <button id="linkBtn" class="chip">Video link</button>
+                <button id="driveBtn" class="chip">Google Drive</button>
                 <button id="fileBtn" class="chip">My phone</button>
                 <input id="fileInput" type="file" accept="video/*" hidden>
               </div>
             </div>
-            <div id="youtubeWrap" class="media-wrap" hidden><div id="youtubePlayer"></div></div>
+
+            <div id="youtubeWrap" class="media-wrap" hidden>
+              <div id="youtubePlayer"></div>
+            </div>
+
             <video id="videoPlayer" class="media-wrap" controls playsinline hidden></video>
-            <div id="emptyPlayer" class="empty-player"><div class="play-mark">▶</div><h3>Pick something lovely</h3><p>Choose YouTube or a supported direct video link to begin.</p></div>
-            <div class="player-foot"><span id="playStatus">Waiting for a video</span><span>Playback sync is best-effort</span></div>
+
+            <div id="emptyPlayer" class="empty-player">
+              <div class="play-mark">▶</div>
+              <h3>Pick something lovely</h3>
+              <p>Choose YouTube or a supported direct video link to begin.</p>
+            </div>
+
+            <div class="player-foot">
+              <span id="playStatus">Waiting for a video</span>
+              <span>Playback sync is best-effort</span>
+            </div>
           </div>
 
           <div class="camera-card">
-            <div class="section-title"><div><span class="eyebrow">SAY HELLO</span><h3>Face cam <span>♡</span></h3></div><span class="limit">2 camera spots</span></div>
-            <div class="camera-grid">
-              <div class="cam-box"><video id="localVideo" autoplay muted playsinline></video><span>You</span></div>
-              <div class="cam-box"><video id="remoteVideo" autoplay playsinline></video><span>Guest</span></div>
+            <div class="section-title">
+              <div>
+                <span class="eyebrow">SAY HELLO</span>
+                <h3>Face cam <span>♡</span></h3>
+              </div>
+              <span class="limit">2 camera spots</span>
             </div>
+
+            <div class="camera-grid">
+              <div class="cam-box">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <span>You</span>
+              </div>
+              <div class="cam-box">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <span>Guest</span>
+              </div>
+            </div>
+
             <div class="controls">
               <button id="cameraToggle" class="secondary">Turn camera on</button>
               <button id="switchCamera" class="secondary">Switch camera</button>
               <button id="micToggle" class="secondary">Mute mic</button>
+              <button id="leaveCallBtn" class="secondary">End call</button>
             </div>
+
             <p class="hint">Camera and microphone access require HTTPS and your permission.</p>
           </div>
         </div>
 
         <aside class="chat-card">
-          <div class="section-title"><div><span class="eyebrow">LITTLE MESSAGES</span><h3>Our chat 💌</h3></div></div>
-          <div id="messages" class="messages"><div class="system-message">Welcome in. Be kind, have fun. ♡</div></div>
+          <div class="section-title">
+            <div>
+              <span class="eyebrow">LITTLE MESSAGES</span>
+              <h3>Our chat 💌</h3>
+            </div>
+          </div>
+
+          <div id="messages" class="messages">
+            <div class="system-message">Welcome in. Be kind, have fun. ♡</div>
+          </div>
+
           <form id="chatForm" class="chat-form">
+            <button type="button" id="photoBtn" class="secondary" aria-label="Send photo">＋</button>
             <input id="messageInput" maxlength="1000" placeholder="Send a sweet message..." autocomplete="off">
             <button class="send" aria-label="Send message">➤</button>
           </form>
-          <div class="chat-bottom"><span>Room is temporary</span><button id="leaveBtn" class="leave">Leave room</button></div>
+
+          <div class="chat-bottom">
+            <span>Room is temporary</span>
+            <button id="leaveBtn" class="leave">Leave room</button>
+          </div>
         </aside>
       </div>
     </section>
+
     <footer>Made for shared moments <span>♥</span></footer>
   </main>
 
@@ -97,6 +155,7 @@
       <button id="dialogConfirm" class="primary" value="default">Continue</button>
     </form>
   </dialog>
+
   <script src="https://www.youtube.com/iframe_api"></script>
   <script src="script.js"></script>
 </body>
