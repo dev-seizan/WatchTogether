@@ -1,4 +1,3 @@
-
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -8,6 +7,8 @@ const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
 const MAX_PEOPLE = 10;
 const ROOM_IDLE_MS = 30 * 60 * 1000;
+const RATE_WINDOW_MS = 4000;
+const RATE_MAX_MSGS = 40;
 const rooms = new Map();
 
 const MIME = {
@@ -100,12 +101,19 @@ wss.on("connection", ws => {
   ws.id = Math.random().toString(36).slice(2, 12);
   ws.roomId = null;
   ws.isAlive = true;
+  ws.msgTimes = [];
 
   ws.on("pong", () => {
     ws.isAlive = true;
   });
 
   ws.on("message", raw => {
+    // Simple rate limit (flood protection)
+    const now = Date.now();
+    ws.msgTimes.push(now);
+    ws.msgTimes = ws.msgTimes.filter(t => now - t < RATE_WINDOW_MS);
+    if (ws.msgTimes.length > RATE_MAX_MSGS) return;
+
     let msg;
 
     try {
@@ -148,7 +156,9 @@ wss.on("connection", ws => {
 
         room = {
           clients: new Set(),
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          lastActive: Date.now(),
+          video: null
         };
 
         rooms.set(roomId, room);
@@ -166,6 +176,8 @@ wss.on("connection", ws => {
         .trim()
         .slice(0, 24) || "Guest";
 
+      room.lastActive = Date.now();
+
       const peers = [...room.clients].map(c => ({
         id: c.id,
         name: c.name
@@ -178,7 +190,8 @@ wss.on("connection", ws => {
         id: ws.id,
         roomId,
         peers,
-        count: room.clients.size
+        count: room.clients.size,
+        video: room.video
       });
 
       broadcast(room, {
@@ -198,6 +211,8 @@ wss.on("connection", ws => {
     const room = rooms.get(ws.roomId);
     if (!room) return;
 
+    room.lastActive = Date.now();
+
     if (msg.type === "signal") {
       const target = [...room.clients].find(c => c.id === msg.to);
 
@@ -209,43 +224,74 @@ wss.on("connection", ws => {
         });
       }
 
-    } else if (["chat", "sync", "youtube", "photo"].includes(msg.type)) {
+    } else if (msg.type === "call-ended") {
+      broadcast(room, {
+        type: "call-ended",
+        from: ws.id
+      }, ws);
 
-      if (msg.type === "chat" && typeof msg.text === "string") {
-        broadcast(room, {
-          type: "chat",
-          from: ws.id,
-          name: ws.name,
-          text: msg.text.slice(0, 1000)
-        }, ws);
+    } else if (msg.type === "chat" && typeof msg.text === "string") {
+      broadcast(room, {
+        type: "chat",
+        from: ws.id,
+        name: ws.name,
+        text: msg.text.slice(0, 1000)
+      }, ws);
 
+    } else if (
+      msg.type === "photo" &&
+      typeof msg.data === "string" &&
+      msg.data.length <= 950000
+    ) {
+      broadcast(room, {
+        type: "photo",
+        from: ws.id,
+        name: ws.name,
+        data: msg.data
+      }, ws);
+
+    } else if (msg.type === "youtube" && typeof msg.url === "string") {
+      const url = msg.url.slice(0, 2000);
+
+      room.video = { kind: "yt", url, time: 0, action: "pause" };
+
+      broadcast(room, {
+        type: "youtube",
+        from: ws.id,
+        name: ws.name,
+        url
+      }, ws);
+
+    } else if (msg.type === "sync") {
+      // Room ki current video state naye joiner ke liye save karo
+      if (msg.kind === "direct" && typeof msg.url === "string") {
+        room.video = {
+          kind: "direct",
+          url: msg.url.slice(0, 2000),
+          time: 0,
+          action: "pause"
+        };
       } else if (
-        msg.type === "photo" &&
-        typeof msg.data === "string" &&
-        msg.data.length <= 950000
+        msg.kind === "direct-control" &&
+        room.video &&
+        room.video.kind === "direct"
       ) {
-        broadcast(room, {
-          type: "photo",
-          from: ws.id,
-          name: ws.name,
-          data: msg.data
-        }, ws);
-
-      } else if (msg.type === "youtube" && typeof msg.url === "string") {
-        broadcast(room, {
-          type: "youtube",
-          from: ws.id,
-          name: ws.name,
-          url: msg.url.slice(0, 2000)
-        }, ws);
-
-      } else if (msg.type === "sync") {
-        broadcast(room, {
-          type: "sync",
-          from: ws.id,
-          ...msg
-        }, ws);
+        room.video.time = Number(msg.time) || 0;
+        room.video.action = msg.action === "play" ? "play" : "pause";
+      } else if (
+        msg.kind === "yt" &&
+        room.video &&
+        room.video.kind === "yt"
+      ) {
+        room.video.time = Number(msg.time) || 0;
+        room.video.action = msg.action === "play" ? "play" : "pause";
       }
+
+      broadcast(room, {
+        type: "sync",
+        from: ws.id,
+        ...msg
+      }, ws);
     }
   });
 
@@ -265,13 +311,14 @@ const heartbeat = setInterval(() => {
   }
 }, 30000);
 
+// Ab ACTUAL idle time check hota hai (lastActive), na ki creation time
 const roomSweep = setInterval(() => {
   const now = Date.now();
 
   for (const [id, room] of rooms) {
     if (
       room.clients.size === 0 ||
-      now - room.createdAt > ROOM_IDLE_MS
+      now - room.lastActive > ROOM_IDLE_MS
     ) {
       for (const client of room.clients) {
         send(client, {
