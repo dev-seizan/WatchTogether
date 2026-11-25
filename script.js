@@ -113,7 +113,7 @@ function addMessage(name, text, mine = false, image = null) {
   trimMessages();
 }
 
-// ✅ Camera on ho ya koi remote cam ho → chat ke andar box dikhe, chat apne aap neeche shift
+// Camera on ho ya koi remote cam ho -> chat ke andar box dikhe, chat apne aap neeche shift
 function refreshCallArea() {
   const hasRemotes = $("remoteCams").children.length > 0;
   $("callArea").hidden = !(state.cameraOn || hasRemotes);
@@ -256,7 +256,7 @@ function connect(roomId, create, reconnect = false) {
   };
 }
 
-// Create room -> naya tab
+// 2nd PAGE (naya tab) dono cases me khulega
 $("createBtn").onclick = () => {
   window.open(inviteUrl(randomRoom()), "_blank");
 };
@@ -268,7 +268,8 @@ $("joinBtn").onclick = () => {
     return showError("Paste an invitation link first.");
   }
 
-  connect(id, true);
+  // ✅ FIX: join bhi ab naye tab me khulta hai (same page pe nahi)
+  window.open(inviteUrl(id), "_blank");
 };
 
 $("copyInvite").onclick = async () => {
@@ -636,7 +637,6 @@ async function startMedia(video) {
 
     stream.getAudioTracks().forEach(t => t.enabled = state.micOn);
 
-    // ✅ Button labels update
     $("micToggle").textContent = state.micOn ? "🎤 Mic" : "🔇 Muted";
     $("cameraToggle").textContent = video ? "🚫 Cam off" : "📷 Camera";
 
@@ -852,6 +852,7 @@ function closePeer(id) {
   removeRemoteBox(id);
 }
 
+// 2nd page (room wala tab) khulte hi auto-join
 const initialRoom = new URLSearchParams(location.search).get("room");
 
 if (initialRoom) {
